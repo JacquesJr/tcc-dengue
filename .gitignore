@@ -1,0 +1,9 @@
+venv/
+src/__pycache__/
+winehq.key
+data/processed/dengue_processed.csv
+data/raw/DENGBR22.csv
+data/raw/DENGBR23.csv
+data/raw/DENGBR24.csv
+data/raw/ips_brasil_municipios.csv
+data/raw/Uberaba22.csv
