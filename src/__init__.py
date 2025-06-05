@@ -1,2 +1,2 @@
-from .data_preprocessing import load_data, preprocess_and_merge, prepocess_uberaba_data
-from .model import train_random_forest, prever_casos
+from .data_processing import preprocess_data
+from .model import predict_deng

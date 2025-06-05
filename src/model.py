@@ -1,80 +1,133 @@
 """Random forest model."""
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_squared_error, mean_absolute_error
+from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.model_selection import train_test_split, TimeSeriesSplit, RandomizedSearchCV
+from sklearn.metrics import root_mean_squared_error, r2_score
+import matplotlib.pyplot as plt
 import pandas as pd
+import numpy as np
 
-def train_random_forest(df, target_col='DENG_CASES_COUNT'):
-    """Random forest model."""
-    x = df.drop(columns=[target_col, 'ID_MUNICIP'])
-    y = df[target_col]
-
-    x_train, x_test, y_train, y_test = train_test_split(x, y, random_state=42)
-
-    model = RandomForestRegressor(n_estimators=100, random_state=42)
-    model.fit(x_train, y_train)
-
-    y_pred = model.predict(x_test)
-    mse = mean_squared_error(y_test, y_pred)
-    importancias = pd.Series(model.feature_importances_, index=x.columns).sort_values(ascending=False)
-    return model, mse, importancias
-
-def prever_casos(df):
-    # Create a copy of the dataframe to avoid modifying the original
-    df = df.copy()
+def predict_deng():
+    df = load_and_preprocess_data('data/processed/table_processed.csv')
     
-    # Ensure target variable exists
-    if 'DENG_CASES' not in df.columns:
-        raise ValueError("Target variable 'DENG_CASES' not found in dataframe")
-    
-    # Columns we always want to drop (non-feature columns)
-    always_drop = ['DENG_CASES']  # We'll extract this as our target variable
-    
-    # Explicitly identify date columns that need to be dropped
-    date_columns = []
-    if 'DT_NOTIFIC' in df.columns:
-        date_columns.append('DT_NOTIFIC')
-    if 'Data Medicao' in df.columns:
-        date_columns.append('Data Medicao')
-    
-    # Find any other non-numeric columns (except lag features)
-    non_numeric_cols = []
-    for col in df.columns:
-        # Skip lag features which are numeric and important
-        if col.startswith('lag_'):
-            continue
-        # Skip columns we're already planning to drop
-        if col in always_drop or col in date_columns:
-            continue
-        # Check if column is non-numeric
-        if df[col].dtype == 'object' or pd.api.types.is_datetime64_any_dtype(df[col]):
-            non_numeric_cols.append(col)
-    
-    # Combine all columns to drop
-    cols_to_drop = always_drop + date_columns + non_numeric_cols
-    
-    # Only include columns to drop that actually exist in the dataframe
-    cols_to_drop = [col for col in cols_to_drop if col in df.columns]
-    
-    # Extract features and target
+    # Separando os dados e criando param_grid
+    X = df.drop(columns=['DENG_CASES'])
     y = df['DENG_CASES']
-    
-    # Remove target and non-numeric columns from features
-    X = df.drop(columns=cols_to_drop)
-    
-    # Verify we have numeric data only
-    numeric_cols = X.select_dtypes(include=['number']).columns
-    X = X[numeric_cols]
-    
-    # Split into train and test
-    X_train = X[:-12]
-    y_train = y[:-12]
-    X_test = X[-12:]
-    y_test = y[-12:]
+    y.to_csv('data/processed/deng_cases.csv', sep=';', index=False)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+    param_grid = {
+        'n_estimators': [100, 300, 500],
+        'learning_rate': [0.01, 0.05, 0.1],
+        'max_depth': [3, 5, 7],
+        'min_samples_split': [2, 5, 10],
+        'min_samples_leaf': [1, 3, 5],
+        'subsample': [0.6, 0.8, 1.0],
+        'max_features': ['sqrt', 'log2', None]
+    }
 
-    model = RandomForestRegressor(n_estimators=100, random_state=42)
-    model.fit(X_train, y_train)
-    y_pred = model.predict(X_test)
+    y_pred = train_model(X_train, y_train, X_test, y_test, param_grid)
+    save_predictions(y_test, y_pred)
 
-    mae = mean_absolute_error(y_test, y_pred)
-    return model, y_test, y_pred, mae
+def load_and_preprocess_data(filepath):
+    df = pd.read_csv(filepath, sep=';', parse_dates=['Data_Medicao'], date_format='%Y-%m-%d')
+    df = create_lags(df, lags=[1, 7, 10, 30, 60])
+
+    # Lidando com os dados de Data
+    df['mes'] = df['Data_Medicao'].dt.month
+    df['dia_da_semana'] = df['Data_Medicao'].dt.weekday
+    df['ano'] = df['Data_Medicao'].dt.year
+    df = df.drop(columns=['Data_Medicao'])
+    df['sin_mes'] = np.sin(2 * np.pi * df['mes'] / 12)
+    df['cos_mes'] = np.cos(2 * np.pi * df['mes'] / 12)
+
+    df = pd.get_dummies(df, columns=['Cod_IBGE'])
+    return df
+
+def create_lags(df, lags):
+    for lag in lags:
+        df[f'DENG_CASES{lag}'] = df['DENG_CASES'].shift(lag)
+    return df.dropna()
+
+def train_model(X_train, y_train, X_test, y_test, param_grid):
+    gbr = GradientBoostingRegressor(random_state=42)
+    tscv = TimeSeriesSplit(n_splits=5)
+
+    search = RandomizedSearchCV(
+        estimator=gbr,
+        param_distributions=param_grid,
+        n_iter=30,
+        scoring='neg_mean_squared_error',
+        cv=tscv,
+        verbose=1,
+        n_jobs=-1,
+        random_state=42
+    )
+    search.fit(X_train, y_train)
+
+    print("Melhores parâmetros encontrados:")
+    print(search.best_params_)
+
+    y_pred = gbr.predict(X_test)
+    rmse = root_mean_squared_error(y_test, y_pred)
+    r2 = r2_score(y_test, y_pred)
+    print(f"\n➡️  RMSE: {rmse:.2f}")
+    print(f"➡️  R² Score: {r2:.2f}")
+
+    # Plotando as variáveis com mais importância
+    importances = gbr.feature_importances_
+    sorted_idx = importances.argsort()
+    plt.figure(figsize=(10, 8))
+    plt.barh(X_train.columns[sorted_idx], importances[sorted_idx])
+    plt.title("Importância das Variáveis no Modelo Final")
+    plt.xlabel("Importância")
+    plt.tight_layout()
+    plt.show()
+
+    return y_pred
+
+def save_predictions(y_test, y_pred):
+    df_resultados = pd.DataFrame({
+        'Real': y_test.values,
+        'Previsto': y_pred
+    })
+    df_resultados.to_csv('resultados_previstos.csv', index=False)
+
+# def modelsComparison():
+#     modelos = {
+#         'Linear Regression': LinearRegression(),
+#         'Random Forest': RandomForestRegressor(),
+#         'XGBoost': XGBRegressor(),
+#         'Gradient Boosting': GradientBoostingRegressor(),
+#         'HistGradientBoosting': HistGradientBoostingRegressor()
+#     }
+
+#     resultados = []
+
+#     for nome, modelo in modelos.items():
+#         modelo.fit(X_train, y_train)
+#         y_pred = modelo.predict(X_test)
+#         rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+#         r2 = r2_score(y_test, y_pred)
+#         resultados.append({
+#             'Modelo': nome,
+#             'RMSE': round(rmse, 2),
+#             'R²': round(r2, 2)
+#         })
+
+#     resultados_df = pd.DataFrame(resultados).sort_values(by='R²', ascending=False)
+#     print(resultados_df)
+
+#     modelo = modelos['Gradient Boosting']
+
+#     coeficientes = pd.DataFrame({
+#         'Variavel': X.columns,
+#         'Coeficiente': modelo.coef_
+#     }).sort_values(by='Coeficiente', key=abs, ascending=False)
+
+#     print(coeficientes.head(10))
+
+#     plt.figure(figsize=(10,6))
+#     plt.barh(coeficientes['Variavel'][:15][::-1], coeficientes['Coeficiente'][:15][::-1])
+#     plt.xlabel('Peso (coef.)')
+#     plt.title('Importância das variáveis (Regressão Linear)')
+#     plt.tight_layout()
+#     plt.show()

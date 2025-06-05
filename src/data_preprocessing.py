@@ -2,39 +2,6 @@
 import os
 import pandas as pd
 
-def load_data():
-    """Read data from csv and merge all dengue tables in one."""
-    city_data = pd.read_csv("data/raw/ips_brasil_municipios.csv", sep=',', encoding='utf-8')
-
-    # Load dengue_cases databases
-    dengue_cases_22 = pd.read_csv("data/raw/DENGBR22.csv", sep=',', encoding='utf-8',
-                                low_memory=False, quotechar='"')
-
-    return dengue_cases_22, city_data
-
-def preprocess_and_merge(table_dengue, table_city):
-    """Function to preprocess and merge tables."""
-
-    #Preprocessing table_dengue
-    table_dengue["ID_UNIDADE"] = table_dengue["ID_UNIDADE"].fillna(0).astype(int)
-
-    columns_keep = ["DT_NOTIFIC", "NU_ANO", "SG_UF_NOT", "ID_MUNICIP", "ID_UNIDADE", "DT_SIN_PRI"]
-    table_dengue = table_dengue[columns_keep]
-
-    os.makedirs("data/processed", exist_ok=True)
-    table_dengue.to_csv("data/processed/dengue_processed.csv")
-
-    merged_table = table_dengue.groupby('ID_MUNICIP').size().reset_index(name='DENG_CASES_COUNT')
-
-    merged = pd.merge(table_city, merged_table, left_on='Código IBGE', right_on='ID_MUNICIP',
-                      how='left')
-    merged['DENG_CASES_COUNT'] = merged['DENG_CASES_COUNT'].fillna(0)
-
-    os.makedirs("data/processed", exist_ok=True)
-    table_dengue.to_csv("data/processed/dengue_cases_count.csv")
-
-    return merged
-
 def prepocess_uberaba_data():
     dengue22 = preprocess_uberaba_deng(pd.read_csv('data/raw/DENGBR22.csv', parse_dates=['DT_NOTIFIC'], date_format='%Y%m%d',
                                                  encoding='utf-8', low_memory=False))
@@ -43,17 +10,18 @@ def prepocess_uberaba_data():
     dengue24 = preprocess_uberaba_deng(pd.read_csv('data/raw/DENGBR24.csv', parse_dates=['DT_NOTIFIC'], date_format='%Y%m%d',
                                                  encoding='utf-8', low_memory=False))
     dengue_merged = pd.concat([dengue22, dengue23, dengue24], ignore_index=True)
-
     uberaba_socio = preprocess_uberaba_socio(pd.read_csv('data/raw/ips_brasil_municipios.csv'))
-
-    climate_uberaba22 = pd.read_csv('data/raw/Uberaba22.csv', parse_dates=['Data Medicao'], date_format='%Y-%m-%d')
-    climate_uberaba23 = pd.read_csv('data/raw/Uberaba23.csv', parse_dates=['Data Medicao'], date_format='%Y-%m-%d')
-    climate_uberaba24 = pd.read_csv('data/raw/Uberaba24.csv', parse_dates=['Data Medicao'], date_format='%Y-%m-%d')
-    climate_uberaba_merged = pd.concat([climate_uberaba22, climate_uberaba23, climate_uberaba24], ignore_index=True)
+    climate_uberaba = pd.read_csv('data/raw/Uberaba22-23-24.csv', sep=';', parse_dates=['Data Medicao'], date_format='%Y-%m-%d')
 
     # Merge com clima
-    merged = pd.merge(climate_uberaba_merged, dengue_merged, left_on='Data Medicao', right_on='DT_NOTIFIC', how='right')
+    merged = pd.merge(climate_uberaba, dengue_merged, left_on='Data Medicao', right_on='DT_NOTIFIC', how='right')
     merged['DENG_CASES'] = merged['DENG_CASES'].fillna(0)
+    
+    print("dengue22:", dengue22.shape)
+    print("dengue23:", dengue23.shape)
+    print("dengue24:", dengue24.shape)
+    print("dengue_merged:", dengue_merged.shape)
+    print("merged:", merged.shape)
 
     # Pegar apenas as informações socioeconômicas de Uberaba
     for col in uberaba_socio.columns:
@@ -64,14 +32,11 @@ def prepocess_uberaba_data():
     for lag in range(1, 8):  # últimos 7 dias
         merged[f'lag_{lag}'] = merged['DENG_CASES'].shift(lag)
 
-    merged = merged.dropna()
-
-    return merged
+    return merged.dropna()
 
 def preprocess_uberaba_deng(table):
     #Tratando a tabela de casos de dengue
     table["ID_UNIDADE"] = table["ID_UNIDADE"].fillna(0).astype(int)
-
     columns_keep = ["DT_NOTIFIC", "NU_ANO", "SG_UF_NOT", "ID_MUNICIP", "ID_UNIDADE", "DT_SIN_PRI"]
     table = table[columns_keep]
 
@@ -91,3 +56,26 @@ def preprocess_uberaba_socio(table):
     uberaba_socio = table[table['Código IBGE'] == 317010]
 
     return uberaba_socio
+
+def prepocess_data():
+    dengue22 = pd.read_csv('data/raw/DENGBR22.csv', parse_dates=['DT_NOTIFIC'], date_format='%Y%m%d',
+                                                 encoding='utf-8', low_memory=False)
+    dengue23 = pd.read_csv('data/raw/DENGBR23.csv', parse_dates=['DT_NOTIFIC'], date_format='%Y%m%d',
+                                                 encoding='utf-8', low_memory=False)
+    dengue24 = pd.read_csv('data/raw/DENGBR24.csv', parse_dates=['DT_NOTIFIC'], date_format='%Y%m%d',
+                                                 encoding='utf-8', low_memory=False)
+    dengue_merged = pd.concat([dengue22, dengue23, dengue24], ignore_index=True)
+    cities_socio = preprocess_socio(pd.read_csv('data/raw/ips_brasil_municipios.csv'))
+
+    dengue_by_city = dengue_merged.groupby('ID_MUNICIP').size().reset_index(name='DENG_CASES')
+
+    # Pegar as informações socioeconômicas
+    merged = pd.merge(dengue_by_city, cities_socio, left_on='ID_MUNICIP', right_on='Código IBGE', how='left')
+
+    return merged.dropna()
+
+def preprocess_socio(table):
+    #Preprocessing city table
+    table['Código IBGE'] = table['Código IBGE'] // 10
+
+    return table
