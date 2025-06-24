@@ -1,4 +1,4 @@
-from src import preprocess_data, predict_deng, load_and_merge_data
+from src import predict_deng, load_and_merge_data
 
 def main():
     df_processed = load_and_merge_data()

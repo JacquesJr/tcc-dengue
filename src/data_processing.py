@@ -5,20 +5,17 @@ import re
 from glob import glob
 
 def load_and_merge_data():
-    # Lendo todos os arquivos
     df_dengue = dengue_data()
     climate = climate_data()
     df_socio = socio_data()
 
-    # Mergeando as três tabelas
     df_merged = merge_tables(df_dengue, climate, df_socio)
-
     df_processed = preprocess_data(df_merged)
+
     return df_processed
 
 def preprocess_data(df_processed):
-    # Ajustando nome das colunas
-    df_processed['DENG_CASES'] = df_processed['DENG_CASES'].fillna(0)
+    df_processed['CASES_NOTIFIC'] = df_processed['CASES_NOTIFIC'].fillna(0)
     df_processed.columns = (
         df_processed.columns
         .astype(str)
@@ -46,14 +43,13 @@ def preprocess_data(df_processed):
     return df_processed
 
 def merge_tables(df_dengue, df_climate, df_socio):
-    df_merged = pd.merge(df_climate, df_dengue, left_on=['Data Medicao', 'Cod IBGE'], right_on=['DT_SIN_PRI', 'ID_MUNICIP'], how='left')
+    df_merged = pd.merge(df_climate, df_dengue, left_on=['Data Medicao', 'Cod IBGE'], right_on=['DATA', 'ID_MUNICIP'], how='left')
     df_merged = pd.merge(df_merged, df_socio, left_on='Cod IBGE', right_on='Código IBGE', how='left')
 
-    df_merged = df_merged.drop(['DT_SIN_PRI', 'ID_MUNICIP'], axis=1)
+    df_merged = df_merged.drop(['DATA', 'ID_MUNICIP', 'Código IBGE', 'Cod IBGE'], axis=1)
     return df_merged
 
 def socio_data():
-    #Preprocessing city table
     df_socio = pd.read_csv('data/raw/ips_brasil_municipios.csv')
     df_socio['Código IBGE'] = df_socio['Código IBGE'] // 10
     df_socio['Código IBGE'] = df_socio['Código IBGE'].astype(str)
@@ -64,22 +60,21 @@ def dengue_data():
     # Busca todos os arquivos de dengue
     arquivos_csv = glob(os.path.join('data/raw/dengue', '*.csv'))
 
-    dataframes = []
+    dengue_dfs = []
     for arquivo in arquivos_csv:
-        # DT_SIN_PRI signigica a data dos primeiros sintomas + importante do que a data em que a pessoa foi no médico!
-        df = pd.read_csv(arquivo, encoding='utf-8', low_memory=False)
-        df['DT_SIN_PRI'] = pd.to_datetime(df['DT_SIN_PRI'], format='%Y%m%d', errors='coerce')
+        df = pd.read_csv(arquivo, encoding='utf-8', low_memory=False, usecols=['DT_NOTIFIC', 'ID_MUNICIP'])
+        df['DT_NOTIFIC'] = pd.to_datetime(df['DT_NOTIFIC'], format='%Y%m%d', errors='coerce')
         df['ID_MUNICIP'] = df['ID_MUNICIP'].astype(str)
-        df = df[['DT_SIN_PRI', 'ID_MUNICIP']].groupby(['ID_MUNICIP', 'DT_SIN_PRI']).size().reset_index(name='DENG_CASES')
         
-        dataframes.append(df)
+        df_dengue = df.dropna(subset=['DT_NOTIFIC']).groupby(['ID_MUNICIP', 'DT_NOTIFIC']).size().reset_index(name='CASES_NOTIFIC')
+        df_dengue.rename(columns={'DT_NOTIFIC': 'DATA'}, inplace=True)
+        dengue_dfs.append(df_dengue)
     
-    dengue = pd.concat(dataframes, ignore_index=True)
+    dengue = pd.concat(dengue_dfs, ignore_index=True)
     dengue.to_csv('data/processed/dengue.csv', sep=';', index=False)
     return dengue
 
 def climate_data():
-    # Busca todos os arquivos de climate
     arquivos_csv = glob(os.path.join('data/raw/climate', '*.csv'))
 
     dataframes = []
@@ -91,16 +86,21 @@ def climate_data():
 
         df = pd.read_csv(arquivo, sep=';', parse_dates=['Data Medicao'], date_format='%Y-%m-%d')
         df['Cod IBGE'] = cod_ibge
-        
-        # Fazendo um shift para fazer a previsão a partir das variáveis do dia anterior.
-        columns_to_shift = [col for col in df.columns if col not in ['Data Medicao', 'Cod IBGE']]
-        df[columns_to_shift] = df[columns_to_shift].shift(1)
 
+        columns_to_convert = [col for col in df.columns if col not in ['Data Medicao', 'Cod IBGE']]
+        for col in columns_to_convert:
+            if df[col].dtype == 'object':
+                df[col] = df[col].str.replace(',', '.', regex=False).astype(float)
+            df[f'{col}_media_movel_7d'] = df[col].rolling(window=7, min_periods=1).mean().shift(1)
+            df[f'{col}_media_movel_10d'] = df[col].rolling(window=10, min_periods=1).mean().shift(1)
+
+        df = df.drop(columns=columns_to_convert)
         dataframes.append(df)
 
     climate = pd.concat(dataframes, ignore_index=True)
-
+    climate = climate.bfill().ffill()
     climate.to_csv('data/processed/climate.csv', sep=';', index=False)
+
     return climate
 
 def prepare_single_prediction_features(ibge_code, recent_dengue_cases, df_climate_recent):
@@ -113,39 +113,30 @@ def prepare_single_prediction_features(ibge_code, recent_dengue_cases, df_climat
     df_processed = preprocess_data(df_merged)
     return df_processed
 
-def process_data_forecast_horizon(filepath, forecast_horizon=7):
+def process_data(filepath):
     df = pd.read_csv(filepath, sep=';', parse_dates=['Data_Medicao'], date_format='%Y-%m-%d')
-    
-    # Cria as features (variáveis de entrada)
-    df = create_future_targets(df, horizon=forecast_horizon)
-    df = create_lags(df, lags=[2, 4, 7])
+    # Cria o alvo para 1 dia no futuro
+    df = create_future_targets(df, 'CASES_NOTIFIC', horizon=1)
+    df = create_lags(df, 'CASES_NOTIFIC', lags=[2, 4, 7])
 
-    # Cria features baseadas na data
     df['mes'] = df['Data_Medicao'].dt.month
     df['dia_da_semana'] = df['Data_Medicao'].dt.weekday
-    df['ano'] = df['Data_Medicao'].dt.year
     df['sin_mes'] = np.sin(2 * np.pi * df['mes'] / 12)
     df['cos_mes'] = np.cos(2 * np.pi * df['mes'] / 12)
 
-    # Remove linhas com NaN que foram criadas pelos lags e future_targets
     df = df.dropna()
-
-    # Define as colunas alvo (y) e as colunas de features (X)
-    target_cols = [f'DENG_CASES_+{i}' for i in range(1, forecast_horizon + 1)]
+    target_cols = ['CASES_NOTIFIC_+1']
     y = df[target_cols]
-    X = df.drop(columns=['DENG_CASES', 'Data_Medicao'] + target_cols)
-
-    # Aplica one-hot encoding nas features categóricas
-    X = pd.get_dummies(X, columns=['Cod_IBGE'])
+    X = df.drop(columns=['CASES_NOTIFIC', 'Data_Medicao'] + target_cols)
 
     return X, y
 
-def create_future_targets(df, horizon):
+def create_future_targets(df, column_name, horizon):
     for i in range(1, horizon + 1):
-        df[f'DENG_CASES_+{i}'] = df['DENG_CASES'].shift(-i)
+        df[f'{column_name}_+{i}'] = df[column_name].shift(-i)
     return df
 
-def create_lags(df, lags):
+def create_lags(df, column_name, lags):
     for lag in lags:
-        df[f'DENG_CASES_lag_{lag}'] = df['DENG_CASES'].shift(lag)
+        df[f'{column_name}_lag_{lag}'] = df[column_name].shift(lag)
     return df
