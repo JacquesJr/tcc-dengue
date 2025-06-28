@@ -103,16 +103,6 @@ def climate_data():
 
     return climate
 
-def prepare_single_prediction_features(ibge_code, recent_dengue_cases, df_climate_recent):
-    df_climate_recent['Cod IBGE'] = ibge_code
-    df_climate_recent['DENG_CASES'] = recent_dengue_cases
-
-    df_socio = socio_data()
-    df_merged = pd.merge(df_climate_recent, df_socio, left_on='Cod IBGE', right_on='Código IBGE', how='left')
-
-    df_processed = preprocess_data(df_merged)
-    return df_processed
-
 def process_data(filepath):
     df = pd.read_csv(filepath, sep=';', parse_dates=['Data_Medicao'], date_format='%Y-%m-%d')
     # Cria o alvo para 1 dia no futuro
@@ -140,3 +130,38 @@ def create_lags(df, column_name, lags):
     for lag in lags:
         df[f'{column_name}_lag_{lag}'] = df[column_name].shift(lag)
     return df
+
+def prepare_single_prediction_features(ibge_code, recent_dengue_cases, df_climate_recent):
+    df = df_climate_recent.copy()
+
+    columns_to_convert = [col for col in df.columns if col not in ['Data Medicao', 'Cod IBGE']]
+    for col in columns_to_convert:
+        if df[col].dtype == 'object':
+            df[col] = df[col].str.replace(',', '.', regex=False).astype(float)
+        df[f'{col}_media_movel_7d'] = df[col].rolling(window=7, min_periods=1).mean().shift(1)
+        df[f'{col}_media_movel_10d'] = df[col].rolling(window=10, min_periods=1).mean().shift(1)
+
+    df = df.drop(columns=columns_to_convert)
+
+    df['Cod IBGE'] = str(ibge_code)
+
+    df_socio = socio_data()
+    df_merged = pd.merge(df, df_socio, left_on='Cod IBGE', right_on='Código IBGE', how='left')
+    df_merged['CASES_NOTIFIC'] = recent_dengue_cases
+
+    df_processed = preprocess_data(df_merged)
+
+    df = create_future_targets(df_processed, 'CASES_NOTIFIC', horizon=1)
+    df = create_lags(df, 'CASES_NOTIFIC', lags=[2, 4, 7])
+
+    df['Data_Medicao'] = pd.to_datetime(df['Data_Medicao'])
+    df['mes'] = df['Data_Medicao'].dt.month
+    df['dia_da_semana'] = df['Data_Medicao'].dt.weekday
+    df['sin_mes'] = np.sin(2 * np.pi * df['mes'] / 12)
+    df['cos_mes'] = np.cos(2 * np.pi * df['mes'] / 12)
+
+    df = df.bfill().ffill()
+
+    X = df.drop(columns=['CASES_NOTIFIC', 'Data_Medicao', 'CASES_NOTIFIC_+1', 'Cod_IBGE', 'Código_IBGE'])
+
+    return X

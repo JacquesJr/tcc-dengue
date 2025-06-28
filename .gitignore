@@ -1,4 +1,8 @@
 venv/
 src/__pycache__/
 winehq.key
-data/
+data/raw/
+data/processed/
+data/results/
+src/app/__pycache__/app.cpython-39.pyc
+src/app/__pycache__/__init__.cpython-39.pyc

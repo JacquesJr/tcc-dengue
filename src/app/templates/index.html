@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Previsão de Casos de Dengue</title>
+    <style>
+        body { font-family: sans-serif; margin: 2em; }
+        .container { max-width: 600px; margin: auto; padding: 1em; border: 1px solid #ccc; border-radius: 5px; }
+        .form-group { margin-bottom: 1em; }
+        label { display: block; margin-bottom: 0.5em; }
+        input { width: 100%; padding: 0.5em; box-sizing: border-box; }
+        button { padding: 0.7em; color: white; background-color: #007bff; border: none; border-radius: 5px; cursor: pointer; }
+        #result { margin-top: 1em; padding: 1em; background-color: #e9ecef; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Previsão de Casos de Dengue para os Próximos 7 Dias</h2>
+        <form id="prediction-form">
+            <div class="form-group">
+                <label for="ibge_code">Código IBGE da Cidade:</label>
+                <input type="number" id="ibge_code" name="ibge_code" required placeholder="Ex: 3170107">
+            </div>
+            
+            <div class="form-group">
+                <p>Vá ao seguinte <a href="https://bdmep.inmet.gov.br/#">site do bdmep</a> e pegue os últimos <b>7 DIAS</b> de dados climáticos de uma cidade que queira fazer a previsão!</p>
+                <p>Entre no arquivo gerado pelo bdmep, e tire as observações, deixe apenas os itens da planilha com o cabeçalho e as linhas!</p>
+                <label for="csv_file">Enviar arquivo CSV com dados climáticos:</label>
+                <input type="file" id="csv_file" name="csv_file" accept=".csv">
+            </div>
+
+            <h4>Casos de Dengue Registrados nos Últimos 7 Dias:</h4>
+            <div class="form-group">
+                <label for="dengue_d_minus_1">Ontem:</label>
+                <input type="number" id="dengue_d_minus_1" name="dengue_d_minus_1" required min="0">
+            </div>
+            <div class="form-group">
+                <label for="dengue_d_minus_2">Anteontem:</label>
+                <input type="number" id="dengue_d_minus_2" name="dengue_d_minus_2" required min="0">
+            </div>
+            <div class="form-group">
+                <label for="dengue_d_minus_3">3 dias atrás:</label>
+                <input type="number" id="dengue_d_minus_3" name="dengue_d_minus_3" required min="0">
+            </div>
+            <div class="form-group">
+                <label for="dengue_d_minus_4">4 dias atrás:</label>
+                <input type="number" id="dengue_d_minus_4" name="dengue_d_minus_4" required min="0">
+            </div>
+            <div class="form-group">
+                <label for="dengue_d_minus_5">5 dias atrás:</label>
+                <input type="number" id="dengue_d_minus_5" name="dengue_d_minus_5" required min="0">
+            </div>
+            <div class="form-group">
+                <label for="dengue_d_minus_6">6 dias atrás:</label>
+                <input type="number" id="dengue_d_minus_6" name="dengue_d_minus_6" required min="0">
+            </div>
+            <div class="form-group">
+                <label for="dengue_d_minus_7">7 dias atrás:</label>
+                <input type="number" id="dengue_d_minus_7" name="dengue_d_minus_7" required min="0">
+            </div>
+
+            <button type="submit">Prever</button>
+        </form>
+        <div id="result" style="display:none;"></div>
+    </div>
+
+    <script>
+        document.getElementById('prediction-form').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const formData = new FormData(this);
+            const response = await fetch('/predict', { method: 'POST', body: formData });
+            const data = await response.json();
+            const resultDiv = document.getElementById('result');
+            resultDiv.style.display = 'block';
+            resultDiv.innerHTML = '<h3>Previsão:</h3><pre>' + JSON.stringify(data, null, 2) + '</pre>';
+        });
+    </script>
+</body>
+</html>
+
